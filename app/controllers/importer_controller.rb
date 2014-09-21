@@ -4,8 +4,8 @@ require 'tempfile'
 class MultipleIssuesForUniqueValue < Exception
 end
 
-class NoIssueForUniqueValue < Exception
-end
+#class NoIssueForUniqueValue < Exception
+#end
 
 class Journal < ActiveRecord::Base
   def empty?(*args)
@@ -164,7 +164,9 @@ class ImporterController < ApplicationController
       raise MultipleIssuesForUniqueValue, "Unique field #{unique_attr} with value '#{attr_value}' has duplicate record"
       else
       if issues.size == 0
-        raise NoIssueForUniqueValue, "No issue with #{unique_attr} of '#{attr_value}' found"
+        # comment out raise, so that will not rescue when adding new issues, just return nil is ok, by Hao
+        #raise NoIssueForUniqueValue, "No issue with #{unique_attr} of '#{attr_value}' found"
+        return nil
       end
       issues.first
     end
@@ -338,8 +340,8 @@ class ImporterController < ApplicationController
         end
         unique_attr_checked = true
       end
-
-      if update_issue
+      # when issues.size not nil, do update, by Hao
+      if update_issue && issue_for_unique_attr(unique_attr,row[unique_field],row) != nil  
         begin
           issue = issue_for_unique_attr(unique_attr,row[unique_field],row)
           
@@ -363,17 +365,17 @@ class ImporterController < ApplicationController
             note || '')
             
           @update_count += 1
-          
-        rescue NoIssueForUniqueValue
-          if ignore_non_exist
-            @skip_count += 1
-            next
-          else
-            @failed_count += 1
-            @failed_issues[@failed_count] = row
-            @messages << "Warning: Could not update issue #{@failed_count} below, no match for the value #{row[unique_field]} were found"
-            next
-          end
+        # comment out, no need rescue when adding new issue, by Hao  
+        #rescue NoIssueForUniqueValue
+        #  if ignore_non_exist
+        #    @skip_count += 1
+        #    next
+        #  else
+        #    @failed_count += 1
+        #    @failed_issues[@failed_count] = row
+        #    @messages << "Warning: Could not update issue #{@failed_count} below, no match for the value #{row[unique_field]} were found"
+        #    next
+        #  end
           
         rescue MultipleIssuesForUniqueValue
           @failed_count += 1
@@ -381,6 +383,10 @@ class ImporterController < ApplicationController
           @messages << "Warning: Could not update issue #{@failed_count} below, multiple matches for the value #{row[unique_field]} were found"
           next
         end
+      # when not found new issue and ignore exist, skip, by Hao
+      elsif update_issue && issue_for_unique_attr(unique_attr,row[unique_field],row) == nil && ignore_non_exist
+        @skip_count += 1
+        next
       end
     
       # project affect
@@ -410,18 +416,21 @@ class ImporterController < ApplicationController
       # parent issues
       begin
         parent_value = row[attrs_map["parent_issue"]]
-        if parent_value.present?
+        # added issue_for_unique_attr,  by Hao
+        if parent_value.present? && issue_for_unique_attr(unique_attr,parent_value,row) != nil 
           issue.parent_issue_id = issue_for_unique_attr(unique_attr,parent_value,row).id
-        end
-      rescue NoIssueForUniqueValue
-        if ignore_non_exist
+        elsif parent_value.present? && issue_for_unique_attr(unique_attr,parent_value,row) == nil && ignore_non_exist
           @skip_count += 1
-        else
-          @failed_count += 1
-          @failed_issues[@failed_count] = row
-          @messages << "Warning: When setting the parent for issue #{@failed_count} below, no matches for the value #{parent_value} were found"
-          next
         end
+      #rescue NoIssueForUniqueValue
+      #  if ignore_non_exist
+      #    @skip_count += 1
+      #  else
+      #    @failed_count += 1
+      #    @failed_issues[@failed_count] = row
+      #    @messages << "Warning: When setting the parent for issue #{@failed_count} below, no matches for the value #{parent_value} were found"
+      #    next
+      #  end
       rescue MultipleIssuesForUniqueValue
         @failed_count += 1
         @failed_issues[@failed_count] = row
@@ -515,18 +524,25 @@ class ImporterController < ApplicationController
             if !row[attrs_map[rtype]]
               next
             end
-            other_issue = issue_for_unique_attr(unique_attr,row[attrs_map[rtype]],row)
-            relations = issue.relations.select { |r| (r.other_issue(issue).id == other_issue.id) && (r.relation_type_for(issue) == rtype) }
-            if relations.length == 0
-              relation = IssueRelation.new( :issue_from => issue, :issue_to => other_issue, :relation_type => rtype )
-              relation.save
+            # when update exist issue, by Hao
+            if issue_for_unique_attr(unique_attr,row[attrs_map[rtype]],row) != nil
+              other_issue = issue_for_unique_attr(unique_attr,row[attrs_map[rtype]],row)
+              relations = issue.relations.select { |r| (r.other_issue(issue).id == other_issue.id) && (r.relation_type_for(issue) == rtype) }
+              if relations.length == 0
+                relation = IssueRelation.new( :issue_from => issue, :issue_to => other_issue, :relation_type => rtype )
+                relation.save
+              end
+            # when skip new issue, by Hao
+            elsif issue_for_unique_attr(unique_attr,row[attrs_map[rtype]],row) == nil && ignore_non_exist
+              @skip_count += 1
+              next
             end
           end
-        rescue NoIssueForUniqueValue
-          if ignore_non_exist
-            @skip_count += 1
-            next
-          end
+        #rescue NoIssueForUniqueValue
+        #  if ignore_non_exist
+        #    @skip_count += 1
+        #    next
+        #  end
         rescue MultipleIssuesForUniqueValue
           break
         end
